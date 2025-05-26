@@ -136,7 +136,7 @@ func (p *Processor) ProcessTransferFailure(_ *session.Context, origin *string, t
 	}
 }
 
-func (p *Processor) ProcessDisconnection(_ *session.Context) {
+func (p *Processor) ProcessDisconnection(_ *session.Context, _ *string) {
 	if pl := p.pl.Load(); pl != nil {
 		_ = pl.Close()
 		p.pl.Store(nil)
