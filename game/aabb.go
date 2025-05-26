@@ -55,23 +55,24 @@ func doBBClipCollide(stationary, moving cube.BBox, velocity mgl32.Vec3) (result 
 		minPositive := math32.Max(0, minPenetration)
 		maxPositive := math32.Max(0, maxPenetration)
 
-		if minPositive == 0 {
+		switch {
+		case minPositive == 0:
 			axisPenetrations[i] = 0
 			axisPenetrationsSigned[i] = minPenetration
 			normalDirs[i] = -1
 			seperatingAxes++
 			seperatingAxis = i
-		} else if maxPositive == 0 {
+		case maxPositive == 0:
 			axisPenetrations[i] = 0
 			axisPenetrationsSigned[i] = maxPenetration
 			normalDirs[i] = 1
 			seperatingAxes++
 			seperatingAxis = i
-		} else if minPositive < maxPositive {
+		case minPositive < maxPositive:
 			axisPenetrations[i] = minPositive
 			axisPenetrationsSigned[i] = minPositive
 			normalDirs[i] = -1
-		} else {
+		default:
 			axisPenetrations[i] = maxPositive
 			axisPenetrationsSigned[i] = maxPositive
 			normalDirs[i] = 1

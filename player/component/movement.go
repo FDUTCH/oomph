@@ -683,30 +683,32 @@ func (mc *AuthoritativeMovementComponent) Update(pk *packet.PlayerAuthInput) {
 
 	isNewVersionPlayer := mc.mPlayer.VersionInRange(player.GameVersion1_21_0, 65536)
 	var needsSpeedAdjusted bool
-	if startFlag && stopFlag /*&& hasForwardKeyPressed*/ {
+
+	switch {
+	case startFlag && stopFlag /*&& hasForwardKeyPressed*/ :
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, isNewVersionPlayer, "1.21.0+ start/stop state race condition")
 		mc.sprinting = false
 
 		needsSpeedAdjusted = isNewVersionPlayer
 		mc.airSpeed = 0.02
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "airSpeed adjusted to 0.02")
-	} else if startFlag /*  && !mc.sprinting && hasForwardKeyPressed*/ {
+	case startFlag /*  && !mc.sprinting && hasForwardKeyPressed*/ :
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, isNewVersionPlayer, "1.21.0+ starts sprint")
 		mc.sprinting = true
 
 		needsSpeedAdjusted = isNewVersionPlayer
 		mc.airSpeed = 0.026
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "airSpeed adjusted to 0.026")
-	} else if stopFlag /*&& mc.sprinting && !hasForwardKeyPressed*/ {
+	case stopFlag /*&& mc.sprinting && !hasForwardKeyPressed*/ :
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, isNewVersionPlayer, "1.21.0+ stops sprint")
 		mc.sprinting = false
 
 		needsSpeedAdjusted = isNewVersionPlayer && !mc.serverUpdatedSpeed
 		mc.airSpeed = 0.02
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "airSpeed adjusted to 0.02")
-	} else if clientSprintFlag := pk.InputData.Load(packet.InputFlagSprinting); !stopFlag && !startFlag &&
-		!mc.serverSprintApplied && mc.sprinting != mc.serverSprint && clientSprintFlag == mc.serverSprint &&
-		math32.Abs(pk.MoveVector[1]) >= 0.707 {
+	case !stopFlag && !startFlag &&
+		!mc.serverSprintApplied && mc.sprinting != mc.serverSprint && pk.InputData.Load(packet.InputFlagSprinting) == mc.serverSprint &&
+		math32.Abs(pk.MoveVector[1]) >= 0.707:
 		mc.sprinting = mc.serverSprint
 		mc.serverSprintApplied = true
 		mc.airSpeed = 0.02
@@ -714,12 +716,12 @@ func (mc *AuthoritativeMovementComponent) Update(pk *packet.PlayerAuthInput) {
 			mc.airSpeed = 0.026
 		}
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "(noFlag) air speed adjusted to %f", mc.airSpeed)
-	} else if math32.Abs(pk.MoveVector[1]) < 0.707 && mc.sprinting {
+	case math32.Abs(pk.MoveVector[1]) < 0.707 && mc.sprinting:
 		mc.airSpeed = 0.02
 		mc.sprinting = false
 		needsSpeedAdjusted = isNewVersionPlayer && !mc.serverUpdatedSpeed
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "forced stop sprint due to insufficient move vector %v", pk.MoveVector)
-	} else if !mc.serverSprintApplied {
+	case !mc.serverSprintApplied:
 		mc.serverSprintApplied = true
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "server sprint not applied on current frame")
 	}
