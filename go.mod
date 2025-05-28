@@ -4,7 +4,7 @@ go 1.24.1
 
 require (
 	github.com/chewxy/math32 v1.11.1
-	github.com/cooldogedev/spectrum v0.0.40
+	github.com/cooldogedev/spectrum v0.0.40-0.20250527034552-55ddfe1bba67
 	github.com/df-mc/dragonfly v0.10.3
 	github.com/elliotchance/orderedmap/v2 v2.7.0
 	github.com/ethaniccc/float32-cube v0.0.0-20250511224129-7af1f8c4ee12

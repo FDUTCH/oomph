@@ -174,7 +174,7 @@ func SimulatePlayerMovement(p *player.Player, movement player.MovementComponent)
 }
 
 func simulateGlide(p *player.Player, movement player.MovementComponent) {
-	radians := (math32.Pi / 180.0)
+	radians := math32.Pi / 180.0
 	yaw, pitch := movement.Rotation().Z()*radians, movement.Rotation().X()*radians
 	yawCos := game.MCCos(-yaw - math32.Pi)
 	yawSin := game.MCSin(-yaw - math32.Pi)
@@ -528,7 +528,7 @@ func avoidEdge(movement player.MovementComponent, tx *world.Tx, dbg *player.Debu
 
 func blocksInside(movement player.MovementComponent, tx *world.Tx) ([]world.Block, bool) {
 	bb := movement.BoundingBox()
-	blocks := []world.Block{}
+	var blocks []world.Block
 
 	for _, result := range utils.GetNearbyBlocks(bb.Grow(1), false, true, tx) {
 		pos := result.Position
