@@ -122,7 +122,7 @@ type AuthoritativeMovementComponent struct {
 	gliding         bool
 	glideBoostTicks int64
 
-	flying, trustFlyStatus bool
+	flying, mayFly, trustFlyStatus bool
 
 	allowedInputs int64
 	hasFirstInput bool
@@ -456,7 +456,7 @@ func (mc *AuthoritativeMovementComponent) BoundingBox() cube.BBox {
 		mc.pos[0]+width,
 		mc.pos[1]+mc.size[1]+yOffset,
 		mc.pos[2]+width,
-	).GrowVec3(mgl32.Vec3{-1e-4, 0, -1e-4})
+	).GrowVec3(mgl32.Vec3{-1e-3, 0, -1e-3})
 }
 
 // ClientBoundingBox returns the bounding box of the movement component translated to the client's position.
@@ -624,6 +624,16 @@ func (mc *AuthoritativeMovementComponent) SetFlying(fly bool) {
 	mc.flying = fly
 }
 
+// MayFly returns true if the movement component has the permission to fly.
+func (mc *AuthoritativeMovementComponent) MayFly() bool {
+	return mc.mayFly
+}
+
+// SetMayFly sets whether the movement component has the permission to fly.
+func (mc *AuthoritativeMovementComponent) SetMayFly(mayFly bool) {
+	mc.mayFly = mayFly
+}
+
 // TrustFlyStatus returns whether the movement component can trust the fly status sent by the client.
 func (mc *AuthoritativeMovementComponent) TrustFlyStatus() bool {
 	return mc.trustFlyStatus
@@ -765,6 +775,7 @@ func (mc *AuthoritativeMovementComponent) Update(pk *packet.PlayerAuthInput) {
 	}
 
 	simulation.SimulatePlayerMovement(mc.mPlayer, mc)
+
 	// On older versions, there seems to be a delay before the sprinting status is actually applied.
 	if !isNewVersionPlayer {
 		needsSpeedAdjusted = false
@@ -895,6 +906,10 @@ func (mc *AuthoritativeMovementComponent) SetCorrectionCooldown(cooldown bool) {
 }
 
 func (mc *AuthoritativeMovementComponent) Sync() {
+	if mc.mPlayer.MState.IsReplay {
+		return
+	}
+
 	// Update the blocks in the world so the client can sync itself properly. We only want to update blocks that have the potential to affect the player's movement
 	// (the ones they are colliding with).
 	mc.mPlayer.SyncWorld()
@@ -911,7 +926,7 @@ func (mc *AuthoritativeMovementComponent) Sync() {
 	if !mc.mPlayer.PendingCorrectionACK {
 		mc.mPlayer.SendPacketToClient(&packet.CorrectPlayerMovePrediction{
 			PredictionType: packet.PredictionTypePlayer,
-			Position:       mc.Pos().Add(mgl32.Vec3{0, 1.6215}),
+			Position:       mc.Pos().Add(mgl32.Vec3{0, 1.621}),
 			Delta:          mc.Vel(),
 			OnGround:       mc.OnGround(),
 			Tick:           mc.mPlayer.SimulationFrame,

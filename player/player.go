@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/df-mc/dragonfly/server/event"
-	"github.com/df-mc/dragonfly/server/world"
+	df_world "github.com/df-mc/dragonfly/server/world"
 	"github.com/oomph-ac/oconfig"
 	"github.com/oomph-ac/oomph/entity"
 	"github.com/oomph-ac/oomph/game"
 	"github.com/oomph-ac/oomph/oerror"
 	"github.com/oomph-ac/oomph/player/context"
 	"github.com/oomph-ac/oomph/utils"
+	"github.com/oomph-ac/oomph/world"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -100,6 +101,9 @@ type Player struct {
 
 	// blockBreakProgress (usually between 0 and 1) is how far along the player is from breaking a targeted block.
 	blockBreakProgress float32
+	// blockBreakInProgress is a boolean indicating whether the player is currently breaking a block. This is used for
+	// when server-authoritative block breaking is enabled on the server.
+	blockBreakInProgress bool
 
 	// lastUseProjectileTick is the last tick the player used a projectile item.
 	lastUseProjectileTick int64
@@ -112,9 +116,7 @@ type Player struct {
 	conn       *minecraft.Conn
 	serverConn ServerConn
 
-	world       *world.World
-	worldLoader *world.Loader
-	worldTx     *world.Tx
+	world *world.World
 
 	// listener is the Gophertunnel listener
 	listener *minecraft.Listener
@@ -169,7 +171,7 @@ type Player struct {
 	// remoteEventFunc is the function for sending remote events to the server
 	remoteEventFunc func(e RemoteEvent, p *Player)
 
-	world.NopViewer
+	df_world.NopViewer
 }
 
 // New creates and returns a new Player instance.
@@ -208,7 +210,7 @@ func New(log *logrus.Logger, mState MonitoringState, listener *minecraft.Listene
 		p.LastServerTick = mState.CurrentTime
 	}
 
-	p.RegenerateWorld()
+	p.world = world.New()
 	p.Dbg = NewDebugger(p)
 	return p
 }
@@ -368,14 +370,12 @@ func (p *Player) SetLog(log *logrus.Logger) {
 // Disconnect disconnects the player with the given reason.
 func (p *Player) Disconnect(reason string) {
 	if p.MState.IsReplay {
-		panic(fmt.Errorf("disconnect: %v", reason))
+		panic(fmt.Errorf("replay terminated: %v", reason))
 	}
-
 	p.SendPacketToClient(&packet.Disconnect{
 		Message: reason,
 	})
 	p.conn.Close()
-
 	if p.serverConn != nil {
 		p.serverConn.Close()
 	}
@@ -388,12 +388,11 @@ func (p *Player) BlockAddress(duration time.Duration) {
 }
 
 func (p *Player) IsVersion(ver int32) bool {
-	return p.conn.Proto().ID() == ver
+	return p.Version == ver
 }
 
 func (p *Player) VersionInRange(oldest, latest int32) bool {
-	ver := p.conn.Proto().ID()
-	return ver >= oldest && ver <= latest
+	return p.Version >= oldest && p.Version <= latest
 }
 
 // Close closes the player.
@@ -419,7 +418,7 @@ func (p *Player) Close() error {
 			}
 		}
 		p.Dbg.target = nil
-		p.world.Close()
+		p.world.PurgeChunks()
 		close(p.CloseChan)
 
 		go runtime.GC()

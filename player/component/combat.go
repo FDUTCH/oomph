@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	COMBAT_LERP_POSITION_STEPS = 10
+	CombatLerpPositionSteps = 10
 
-	COMBAT_SURVIVAL_ENTITY_SEARCH_RADIUS float32 = 6.0
-	COMBAT_SURVIVAL_REACH                float32 = 2.9
+	CombatSurvivalEntitySearchRadius float32 = 6.0
+	CombatSurvivalReach              float32 = 2.9
 )
 
 func init() {
@@ -33,10 +33,13 @@ func init() {
 type AuthoritativeCombatComponent struct {
 	mPlayer *player.Player
 
-	entityBB                                      cube.BBox
 	startAttackPos, startEntityPos, startRotation mgl32.Vec3
 	endAttackPos, endEntityPos, endRotation       mgl32.Vec3
-	targetedEntity                                *entity.Entity
+
+	targetedEntity         *entity.Entity
+	targetedRuntimeID      uint64
+	entityBB               cube.BBox
+	uniqueAttackedEntities map[uint64]*entity.Entity
 
 	swingTick int64
 
@@ -52,14 +55,17 @@ type AuthoritativeCombatComponent struct {
 	attackInput *packet.InventoryTransaction
 	// checkMisprediction is true if the client swings in the air and the combat component is not ACK dependent.
 	checkMisprediction bool
+
+	attacked bool
 }
 
 func NewAuthoritativeCombatComponent(p *player.Player) *AuthoritativeCombatComponent {
 	return &AuthoritativeCombatComponent{
-		mPlayer:        p,
-		raycastResults: make([]float32, 0, COMBAT_LERP_POSITION_STEPS*2),
-		rawResults:     make([]float32, 0, COMBAT_LERP_POSITION_STEPS),
-		hooks:          []player.CombatHook{},
+		mPlayer:                p,
+		raycastResults:         make([]float32, 0, CombatLerpPositionSteps*2),
+		rawResults:             make([]float32, 0, CombatLerpPositionSteps),
+		hooks:                  []player.CombatHook{},
+		uniqueAttackedEntities: make(map[uint64]*entity.Entity),
 	}
 }
 
@@ -68,13 +74,30 @@ func (c *AuthoritativeCombatComponent) Hook(h player.CombatHook) {
 	c.hooks = append(c.hooks, h)
 }
 
+func (c *AuthoritativeCombatComponent) UniqueAttacks() map[uint64]*entity.Entity {
+	return c.uniqueAttackedEntities
+}
+
 // Attack notifies the combat component of an attack.
 func (c *AuthoritativeCombatComponent) Attack(input *packet.InventoryTransaction) {
+	var (
+		data *protocol.UseItemOnEntityTransactionData
+		e    *entity.Entity
+	)
+	if input != nil {
+		data = input.TransactionData.(*protocol.UseItemOnEntityTransactionData)
+		e = c.mPlayer.EntityTracker().FindEntity(data.TargetEntityRuntimeID)
+		if e == nil {
+			c.mPlayer.Dbg.Notify(player.DebugModeCombat, true, "entity %d not found", data.TargetEntityRuntimeID)
+			return
+		}
+		c.uniqueAttackedEntities[data.TargetEntityRuntimeID] = e
+	}
+
 	// Do not try to allow another hit if the member player has already notified us of an attack this tick.
 	if c.attackInput != nil {
 		return
 	}
-
 	if input == nil {
 		if oconfig.Combat().FullAuthoritative {
 			c.checkMisprediction = true
@@ -82,13 +105,9 @@ func (c *AuthoritativeCombatComponent) Attack(input *packet.InventoryTransaction
 		return
 	}
 
-	data := input.TransactionData.(*protocol.UseItemOnEntityTransactionData)
-	e := c.mPlayer.EntityTracker().FindEntity(data.TargetEntityRuntimeID)
-	if e == nil {
-		c.mPlayer.Dbg.Notify(player.DebugModeCombat, true, "entity %d not found", data.TargetEntityRuntimeID)
-		return
-	}
+	c.attacked = true
 	c.targetedEntity = e
+	c.targetedRuntimeID = data.TargetEntityRuntimeID
 
 	if oconfig.Combat().FullAuthoritative {
 		rewindPos, ok := e.Rewind(c.mPlayer.ClientTick)
@@ -98,13 +117,14 @@ func (c *AuthoritativeCombatComponent) Attack(input *packet.InventoryTransaction
 		}
 		c.startEntityPos = rewindPos.PrevPosition
 		c.endEntityPos = rewindPos.Position
+		c.startAttackPos = c.mPlayer.Movement().LastPos()
+		c.endAttackPos = c.mPlayer.Movement().Pos()
 	} else {
 		c.startEntityPos = e.PrevPosition
 		c.endEntityPos = e.Position
+		c.startAttackPos = c.mPlayer.Movement().Client().LastPos()
+		c.endAttackPos = c.mPlayer.Movement().Client().Pos()
 	}
-
-	c.startAttackPos = c.mPlayer.Movement().LastPos()
-	c.endAttackPos = c.mPlayer.Movement().Pos()
 	c.entityBB = e.Box(mgl32.Vec3{})
 
 	if c.mPlayer.Movement().Sneaking() {
@@ -114,14 +134,19 @@ func (c *AuthoritativeCombatComponent) Attack(input *packet.InventoryTransaction
 		c.startAttackPos[1] += 1.62
 		c.endAttackPos[1] += 1.62
 	}
-
 	c.attackInput = input
 }
 
 func (c *AuthoritativeCombatComponent) Calculate() bool {
+	if !c.attacked {
+		return false
+	}
+
 	// There is no attack input for this tick.
 	defer c.reset()
+
 	if !c.checkMisprediction && c.attackInput == nil {
+		c.mPlayer.Dbg.Notify(player.DebugModeCombat, true, "no attack input for this tick, skipping combat calculation")
 		return false
 	}
 
@@ -152,13 +177,19 @@ func (c *AuthoritativeCombatComponent) Calculate() bool {
 	)
 
 	if c.checkMisprediction {
-		if c.mPlayer.LastEquipmentData == nil || !c.checkForMispredictedEntity() {
+		/*if c.mPlayer.LastEquipmentData == nil {
+			c.mPlayer.Dbg.Notify(player.DebugModeCombat, true, "no last equipment data available, cannot check for mispredicted entity")
+			return false
+		} else */
+		if !c.checkForMispredictedEntity() {
+			c.mPlayer.Dbg.Notify(player.DebugModeCombat, true, "no mispredicted entity found, skipping combat calculation")
 			return false
 		}
 	}
 
 	movement := c.mPlayer.Movement()
 	if movement.PendingCorrections() > 0 && !oconfig.Combat().FullAuthoritative {
+		c.mPlayer.Dbg.Notify(player.DebugModeCombat, true, "movement component indicates pending corrections (%d), skipping combat calculation", movement.PendingCorrections())
 		return false
 	}
 
@@ -183,7 +214,7 @@ func (c *AuthoritativeCombatComponent) Calculate() bool {
 	}
 
 	hitValid := false
-	stepAmt := 1.0 / float32(COMBAT_LERP_POSITION_STEPS)
+	stepAmt := 1.0 / float32(CombatLerpPositionSteps)
 	for partialTicks := float32(0.0); partialTicks <= 1; partialTicks += stepAmt {
 		lerpedResult := c.lerp(partialTicks)
 		entityBB := c.entityBB.Translate(lerpedResult.entityPos).Grow(0.1)
@@ -206,7 +237,7 @@ func (c *AuthoritativeCombatComponent) Calculate() bool {
 
 		if hitResult, ok := trace.BBoxIntercept(entityBB, lerpedResult.attackPos, lerpedResult.attackPos.Add(dV.Mul(7.0))); ok {
 			raycastDist := lerpedResult.attackPos.Sub(hitResult.Position()).Len()
-			hitValid = hitValid || raycastDist <= COMBAT_SURVIVAL_REACH
+			hitValid = hitValid || raycastDist <= CombatSurvivalReach
 			c.raycastResults = append(c.raycastResults, raycastDist)
 
 			if raycastDist < closestRaycastDist {
@@ -225,7 +256,7 @@ func (c *AuthoritativeCombatComponent) Calculate() bool {
 			altEntityBB := c.entityBB.Translate(altEntPos).Grow(0.1)
 			if hitResult, ok := trace.BBoxIntercept(altEntityBB, lerpedResult.attackPos, lerpedResult.attackPos.Add(dV.Mul(7.0))); ok {
 				altRaycastDist := lerpedResult.attackPos.Sub(hitResult.Position()).Len()
-				hitValid = hitValid || altRaycastDist <= COMBAT_SURVIVAL_REACH
+				hitValid = hitValid || altRaycastDist <= CombatSurvivalReach
 				c.raycastResults = append(c.raycastResults, altRaycastDist)
 				if altRaycastDist < closestRaycastDist {
 					closestRaycastDist = altRaycastDist
@@ -251,7 +282,7 @@ func (c *AuthoritativeCombatComponent) Calculate() bool {
 	// abusing spoofing their input to gain a slight reach advantage. We also want to make sure we're not allowing the player to hit entities
 	// that are behind them. 110 degrees is MC:BE's maximum camera FOV.
 	if !hitValid && c.mPlayer.InputMode == packet.InputModeTouch {
-		hitValid = closestRawDist <= COMBAT_SURVIVAL_REACH && closestAngle <= 110.0
+		hitValid = closestRawDist <= CombatSurvivalReach && closestAngle <= 110.0
 	}
 
 	// If the hit is valid and the player is not on touch mode, check if the closest calculated ray from the player's eye position to the bounding box
@@ -262,13 +293,13 @@ func (c *AuthoritativeCombatComponent) Calculate() bool {
 	check_blocks_between_ray:
 		for blockPos := range game.BlocksBetween(start, end) {
 			flooredBlockPos := cube.PosFromVec3(blockPos)
-			blockInWay := c.mPlayer.WorldTx().Block(df_cube.Pos(flooredBlockPos))
+			blockInWay := c.mPlayer.World().Block(df_cube.Pos(flooredBlockPos))
 			if utils.IsBlockPassInteraction(blockInWay) {
 				continue
 			}
 
 			// Iterate through each block's bounding boxes and check if it is in the way of the ray.
-			for _, blockBB := range utils.BlockBoxes(blockInWay, flooredBlockPos, c.mPlayer.WorldTx()) {
+			for _, blockBB := range utils.BlockBoxes(blockInWay, flooredBlockPos, c.mPlayer.World()) {
 				blockBB = blockBB.Translate(blockPos)
 				if _, ok := trace.BBoxIntercept(blockBB, start, end); ok {
 					hitValid = false
@@ -335,14 +366,17 @@ func (c *AuthoritativeCombatComponent) checkForMispredictedEntity() bool {
 		c.endAttackPos[1] += 1.62
 	}
 
+	// We subtract the rewind tick by 1 here, because the client has already ticked in this instance (which increases)
+	// the client tick by 1, so we have to rewind to the previous tick.
+	rewTick := c.mPlayer.ClientTick - 1
 	for rid, e := range c.mPlayer.EntityTracker().All() {
-		rewind, ok := e.Rewind(c.mPlayer.ClientTick)
+		rewind, ok := e.Rewind(rewTick)
 		if !ok {
 			continue
 		}
 
 		dist := rewind.Position.Sub(c.endAttackPos).Len()
-		if dist <= COMBAT_SURVIVAL_ENTITY_SEARCH_RADIUS {
+		if dist <= CombatSurvivalEntitySearchRadius {
 			if dist < minDist {
 				minDist = dist
 				rewindData = rewind
@@ -364,10 +398,10 @@ func (c *AuthoritativeCombatComponent) checkForMispredictedEntity() bool {
 		TransactionData: &protocol.UseItemOnEntityTransactionData{
 			TargetEntityRuntimeID: eid,
 			ActionType:            protocol.UseItemOnEntityActionAttack,
-			HotBarSlot:            int32(c.mPlayer.LastEquipmentData.HotBarSlot),
-			HeldItem:              c.mPlayer.LastEquipmentData.NewItem,
-			Position:              c.endAttackPos,
-			ClickedPosition:       mgl32.Vec3{},
+			HotBarSlot:            c.mPlayer.Inventory().HeldSlot(),
+			//HeldItem:              held,
+			Position:        c.endAttackPos,
+			ClickedPosition: mgl32.Vec3{},
 		},
 	}
 	return true
@@ -379,6 +413,10 @@ func (c *AuthoritativeCombatComponent) reset() {
 	c.checkMisprediction = false
 	c.raycastResults = c.raycastResults[:0]
 	c.rawResults = c.rawResults[:0]
+	c.attacked = false
+	for rid := range c.uniqueAttackedEntities {
+		delete(c.uniqueAttackedEntities, rid)
+	}
 }
 
 type lerpedResult struct {

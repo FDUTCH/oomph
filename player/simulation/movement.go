@@ -8,6 +8,7 @@ import (
 	"github.com/df-mc/dragonfly/server/world"
 	"github.com/ethaniccc/float32-cube/cube"
 	"github.com/go-gl/mathgl/mgl32"
+	"github.com/oomph-ac/oconfig"
 	"github.com/oomph-ac/oomph/game"
 	"github.com/oomph-ac/oomph/player"
 	"github.com/oomph-ac/oomph/utils"
@@ -35,13 +36,13 @@ func SimulatePlayerMovement(p *player.Player, movement player.MovementComponent)
 		p.Dbg.Notify(player.DebugModeMovementSim, true, "no movement sim for frame %d: unsupported scenario", p.SimulationFrame)
 		movement.Reset()
 		return
-	} else if p.WorldUpdater().ChunkPending(protocol.ChunkPos{int32(movement.Pos().X()) >> 4, int32(movement.Pos().Z()) >> 4}) {
+	} else if p.World().GetChunk(protocol.ChunkPos{int32(movement.Pos().X()) >> 4, int32(movement.Pos().Z()) >> 4}) == nil {
 		p.Dbg.Notify(player.DebugModeMovementSim, true, "no movement sim for frame %d: in unloaded chunk, cancelling all movement", p.SimulationFrame)
 		movement.SetVel(mgl32.Vec3{})
 		return
 	}
 
-	blockUnder := p.WorldTx().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos().Sub(mgl32.Vec3{0, 0.5}))))
+	blockUnder := p.World().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos().Sub(mgl32.Vec3{0, 0.5}))))
 	blockFriction := game.DefaultAirFriction
 
 	// If a teleport was able to be handled, do not continue with the simulation.
@@ -96,7 +97,7 @@ func SimulatePlayerMovement(p *player.Player, movement player.MovementComponent)
 		moveRelative(movement, moveRelativeSpeed)
 		p.Dbg.Notify(player.DebugModeMovementSim, true, "moveRelative force applied (vel=%v)", movement.Vel())
 
-		nearClimbable := utils.BlockClimbable(p.WorldTx().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos()))))
+		nearClimbable := utils.BlockClimbable(p.World().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos()))))
 		if nearClimbable {
 			newVel := movement.Vel()
 			//newVel[0] = game.ClampFloat(newVel[0], -0.3, 0.3)
@@ -117,7 +118,7 @@ func SimulatePlayerMovement(p *player.Player, movement player.MovementComponent)
 			movement.SetVel(newVel)
 		}
 
-		blocksInside, isInsideBlock := blocksInside(movement, p.WorldTx())
+		blocksInside, isInsideBlock := blocksInside(movement, p.World())
 		inCobweb := false
 		if isInsideBlock {
 			for _, b := range blocksInside {
@@ -138,18 +139,18 @@ func SimulatePlayerMovement(p *player.Player, movement player.MovementComponent)
 		}
 
 		// Avoid edges if the player is sneaking on the edge of a block.
-		avoidEdge(movement, p.WorldTx(), p.Dbg)
+		avoidEdge(movement, p.World(), p.Dbg)
 
 		oldVel := movement.Vel()
 		oldOnGround := movement.OnGround()
 
-		tryCollisions(movement, p.WorldTx(), p.Dbg, p.VersionInRange(-1, player.GameVersion1_20_60), clientJumpPrevented)
+		tryCollisions(movement, p.World(), p.Dbg, p.VersionInRange(-1, player.GameVersion1_20_60), clientJumpPrevented)
 		walkOnBlock(movement, blockUnder)
 		movement.SetMov(movement.Vel())
 
-		blockUnder = p.WorldTx().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos().Sub(mgl32.Vec3{0, 0.2}))))
+		blockUnder = p.World().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos().Sub(mgl32.Vec3{0, 0.2}))))
 		if _, isAir := blockUnder.(block.Air); isAir {
-			b := p.WorldTx().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos()).Side(cube.FaceDown)))
+			b := p.World().Block(df_cube.Pos(cube.PosFromVec3(movement.Pos()).Side(cube.FaceDown)))
 			if oomph_block.IsWall(b) || oomph_block.IsFence(b) {
 				blockUnder = b
 			}
@@ -162,8 +163,13 @@ func SimulatePlayerMovement(p *player.Player, movement player.MovementComponent)
 		}
 
 		newVel := movement.Vel()
-		newVel[1] -= movement.Gravity()
-		newVel[1] *= game.GravityMultiplier
+		if eff, ok := p.Effects().Get(packet.EffectLevitation); ok {
+			levSpeed := game.LevitationGravityMultiplier * float32(eff.Amplifier)
+			newVel[1] += (levSpeed - newVel[1]) * 0.2
+		} else {
+			newVel[1] -= movement.Gravity()
+			newVel[1] *= game.NormalGravityMultiplier
+		}
 		newVel[0] *= blockFriction
 		newVel[2] *= blockFriction
 
@@ -229,7 +235,7 @@ func simulateGlide(p *player.Player, movement player.MovementComponent) {
 	movement.SetVel(vel)
 
 	oldVel := vel
-	tryCollisions(movement, p.WorldTx(), p.Dbg, p.VersionInRange(-1, player.GameVersion1_20_60), false)
+	tryCollisions(movement, p.World(), p.Dbg, p.VersionInRange(-1, player.GameVersion1_20_60), false)
 	velDiff := movement.Vel().Sub(movement.Client().Vel())
 	p.Dbg.Notify(player.DebugModeMovementSim, true, "(glide) oldVel=%v, collisions=%v diff=%v", oldVel, movement.Vel(), velDiff)
 }
@@ -260,7 +266,7 @@ func simulationIsReliable(p *player.Player, movement player.MovementComponent) b
 		return true
 	}
 
-	for _, b := range utils.GetNearbyBlocks(movement.BoundingBox().Grow(1), false, true, p.WorldTx()) {
+	for _, b := range utils.GetNearbyBlocks(movement.BoundingBox().Grow(1), false, true, p.World()) {
 		if _, isLiquid := b.Block.(world.Liquid); isLiquid {
 			blockBB := cube.Box(0, 0, 0, 1, 1, 1).Translate(b.Position.Vec3())
 			if movement.BoundingBox().IntersectsWith(blockBB) {
@@ -273,7 +279,7 @@ func simulationIsReliable(p *player.Player, movement player.MovementComponent) b
 	}
 
 	return (p.GameMode == packet.GameTypeSurvival || p.GameMode == packet.GameTypeAdventure) &&
-		!movement.Flying() && !movement.NoClip() && p.Alive
+		!(movement.Flying() || movement.NoClip() || !p.Alive)
 }
 
 func landOnBlock(movement player.MovementComponent, old mgl32.Vec3, blockUnder world.Block) {
@@ -314,47 +320,55 @@ func setPostCollisionMotion(movement player.MovementComponent, oldVel mgl32.Vec3
 	movement.SetVel(newVel)
 }
 
-func tryCollisions(movement player.MovementComponent, tx *world.Tx, dbg *player.Debugger, useSlideOffset bool, clientJumpPrevented bool) {
+func tryCollisions(movement player.MovementComponent, src world.BlockSource, dbg *player.Debugger, useSlideOffset bool, clientJumpPrevented bool) {
 	var completedStep bool
 
 	collisionBB := movement.BoundingBox()
 	currVel := movement.Vel()
-	bbList := utils.GetNearbyBBoxes(collisionBB.Extend(currVel), tx)
+	bbList := utils.GetNearbyBBoxes(collisionBB.Extend(currVel), src)
 	//oneWayBlocks := utils.OneWayCollisionBlocks(utils.GetNearbyBlocks(collisionBB.Extend(currVel), false, false, w))
 
 	// TODO: determine more blocks that are considered to be one-way physics blocks, and
 	// figure out how to calculate ActorCollision::isStuckItem()
 	useOneWayCollisions := movement.StuckInCollider()
 	penetration := mgl32.Vec3{}
-	dbg.Notify(player.DebugModeMovementSim, useOneWayCollisions, "one-way collisions are used for this simulation")
 
 	yVel := mgl32.Vec3{0, currVel.Y()}
 	if clientJumpPrevented {
 		yVel[1] = 0
 	}
-
 	xVel := mgl32.Vec3{currVel.X()}
 	zVel := mgl32.Vec3{0, 0, currVel.Z()}
 
-	for _, blockBox := range bbList {
+	for index := len(bbList) - 1; index >= 0; index-- {
+		blockBox := bbList[index]
 		yVel = game.BBClipCollide(blockBox, collisionBB, yVel, useOneWayCollisions, &penetration)
 	}
-	collisionBB = collisionBB.Translate(mgl32.Vec3{0, yVel.Y()})
-	dbg.Notify(player.DebugModeMovementSim, true, "Y-collision non-step=%f /w penetration=%f", yVel.Y(), penetration.Y())
+	collisionBB = collisionBB.Translate(yVel)
+	dbg.Notify(player.DebugModeMovementSim, true, "Y-collision non-step=%v /w penetration=%v (oneWay=%v)", yVel, penetration, useOneWayCollisions)
 
-	for _, blockBox := range bbList {
+	for index := len(bbList) - 1; index >= 0; index-- {
+		blockBox := bbList[index]
 		xVel = game.BBClipCollide(blockBox, collisionBB, xVel, useOneWayCollisions, &penetration)
 	}
-	collisionBB = collisionBB.Translate(mgl32.Vec3{xVel.X()})
-	dbg.Notify(player.DebugModeMovementSim, true, "X-collision non-step=%f /w penetration=%f", xVel.X(), penetration.X())
+	collisionBB = collisionBB.Translate(xVel)
+	dbg.Notify(player.DebugModeMovementSim, true, "(X) hz-collision non-step=%v /w penetration=%v (oneWay=%v)", xVel, penetration, useOneWayCollisions)
 
-	for _, blockBox := range bbList {
+	for index := len(bbList) - 1; index >= 0; index-- {
+		blockBox := bbList[index]
 		zVel = game.BBClipCollide(blockBox, collisionBB, zVel, useOneWayCollisions, &penetration)
 	}
-	collisionBB = collisionBB.Translate(mgl32.Vec3{0, 0, zVel.Z()})
-	dbg.Notify(player.DebugModeMovementSim, true, "Z-collision non-step=%f /w penetration=%f", zVel.Z(), penetration.Z())
+	collisionBB = collisionBB.Translate(zVel)
+	dbg.Notify(player.DebugModeMovementSim, true, "(Z) hz-collision non-step=%v /w penetration=%v (oneWay=%v)", zVel, penetration, useOneWayCollisions)
 
 	collisionVel := yVel.Add(xVel).Add(zVel)
+	collisionPos := mgl32.Vec3{
+		(collisionBB.Min().X() + collisionBB.Max().X()) * 0.5,
+		collisionBB.Min().Y(),
+		(collisionBB.Min().Z() + collisionBB.Max().Z()) * 0.5,
+	}
+	dbg.Notify(player.DebugModeMovementSim, true, "endCollisionVel=%v endCollisionPos=%v", collisionVel, collisionPos)
+
 	hasPenetration := penetration.LenSqr() >= 9.999999999999999e-12
 	movement.SetStuckInCollider(movement.PenetratedLastFrame() && hasPenetration)
 	movement.SetPenetratedLastFrame(hasPenetration)
@@ -365,50 +379,73 @@ func tryCollisions(movement player.MovementComponent, tx *world.Tx, dbg *player.
 	onGround := movement.OnGround() || (yCollision && currVel.Y() < 0.0)
 
 	if onGround && (xCollision || zCollision) {
-		yStepVel := mgl32.Vec3{0, game.StepHeight}
-		xStepVel := mgl32.Vec3{currVel.X()}
-		zStepVel := mgl32.Vec3{0, 0, currVel.Z()}
+		stepYVel := mgl32.Vec3{0, game.StepHeight}
+		stepXVel := mgl32.Vec3{currVel.X()}
+		stepZVel := mgl32.Vec3{0, 0, currVel.Z()}
 
 		stepBB := movement.BoundingBox()
 		for _, blockBox := range bbList {
-			yStepVel = game.BBClipCollide(blockBox, stepBB, yStepVel, useOneWayCollisions, nil)
+			stepYVel = game.BBClipCollide(blockBox, stepBB, stepYVel, useOneWayCollisions, nil)
 		}
-		stepBB = stepBB.Translate(mgl32.Vec3{0, yStepVel.Y(), 0})
+		stepBB = stepBB.Translate(stepYVel)
+		dbg.Notify(player.DebugModeMovementSim, true, "stepYVel=%v", stepYVel)
 
 		for _, blockBox := range bbList {
-			xStepVel = game.BBClipCollide(blockBox, stepBB, xStepVel, useOneWayCollisions, nil)
+			stepXVel = game.BBClipCollide(blockBox, stepBB, stepXVel, useOneWayCollisions, nil)
 		}
-		stepBB = stepBB.Translate(mgl32.Vec3{xStepVel.X(), 0, 0})
-
+		stepBB = stepBB.Translate(stepXVel)
+		dbg.Notify(player.DebugModeMovementSim, true, "stepXVel=%v", stepXVel)
 		for _, blockBox := range bbList {
-			zStepVel = game.BBClipCollide(blockBox, stepBB, zStepVel, useOneWayCollisions, nil)
+			stepZVel = game.BBClipCollide(blockBox, stepBB, stepZVel, useOneWayCollisions, nil)
 		}
-		stepBB = stepBB.Translate(mgl32.Vec3{0, 0, zStepVel.Z()})
+		stepBB = stepBB.Translate(stepZVel)
+		dbg.Notify(player.DebugModeMovementSim, true, "stepZVel=%v", stepZVel)
 
-		inverseYStepVel := mgl32.Vec3{currVel.X(), -game.StepHeight, currVel.Z()}
+		inverseYStepVel := stepYVel.Mul(-1)
 		for _, blockBox := range bbList {
 			inverseYStepVel = game.BBClipCollide(blockBox, stepBB, inverseYStepVel, useOneWayCollisions, nil)
 		}
-		stepBB = stepBB.Translate(mgl32.Vec3{0, inverseYStepVel.Y(), 0})
-		stepVel := mgl32.Vec3{xStepVel.X(), yStepVel.Y() + inverseYStepVel.Y(), zStepVel.Z()}
-		newBBList := utils.GetNearbyBBoxes(stepBB, tx)
+		stepBB = stepBB.Translate(inverseYStepVel)
+		stepYVel = stepYVel.Add(inverseYStepVel)
+		dbg.Notify(player.DebugModeMovementSim, true, "inverseYStepVel=%v", inverseYStepVel)
+
+		stepVel := stepYVel.Add(stepXVel).Add(stepZVel)
+		newBBList := utils.GetNearbyBBoxes(stepBB, src)
+		stepPos := mgl32.Vec3{
+			(stepBB.Min().X() + stepBB.Max().X()) * 0.5,
+			stepBB.Min().Y(),
+			(stepBB.Min().Z() + stepBB.Max().Z()) * 0.5,
+		}
+		dbg.Notify(player.DebugModeMovementSim, true, "endStepVel=%v endStepPos=%v", stepVel, stepPos)
 		dbg.Notify(player.DebugModeMovementSim, true, "newBBList count: %d", len(newBBList))
-		dbg.Notify(player.DebugModeMovementSim, true, "stepVel=%v collisionVel=%v", stepVel, collisionVel)
 
 		if len(newBBList) == 0 && game.Vec3HzDistSqr(collisionVel) < game.Vec3HzDistSqr(stepVel) {
-			collisionVel = stepVel
-			collisionBB = stepBB
+			// HACK: If a step is possible here, we check which the client seems to align itself better with. The reason this is neccessary
+			// is because in some scenarios, the client seems to reject a step even though Oomph thinks it is possible. This is mainly in scenarios
+			// where the player teleports into a block.
+			stepPosDist := stepPos.Sub(movement.Client().Pos()).Len()
+			collisionPosDist := collisionPos.Sub(movement.Client().Pos()).Len()
 
-			// This sliding offset is only used in versions 1.20.60 and below. On newer versions of the game, this sliding offset is no longer used.
-			if useSlideOffset {
-				completedStep = true
-				slideOffset := movement.SlideOffset().Mul(game.SlideOffsetMultiplier)
-				slideOffset[1] += stepVel.Y()
-				//collisionVel[1] = currVel.Y()
-				movement.SetSlideOffset(slideOffset)
+			// We also need to ensure that the client isn't using this mechanic to create some weird movement bypass, so we will check if the
+			// collisionPosDist is within the correction threshold. Even if the stepPosDist is greater than the correction threshold, Oomph is predicting
+			// a step here anyway so it would make zero difference.
+			if collisionPosDist > oconfig.Movement().CorrectionThreshold || stepPosDist <= collisionPosDist {
+				collisionVel = stepVel
+				collisionBB = stepBB
+
+				// This sliding offset is only used in versions 1.20.60 and below. On newer versions of the game, this sliding offset is no longer used.
+				if useSlideOffset {
+					completedStep = true
+					slideOffset := movement.SlideOffset().Mul(game.SlideOffsetMultiplier)
+					slideOffset[1] += stepVel.Y()
+					movement.SetSlideOffset(slideOffset)
+				}
+				dbg.Notify(player.DebugModeMovementSim, true, "step successful")
+			} else {
+				dbg.Notify(player.DebugModeMovementSim, true, "step failed (client rejection) [clientPos=%v collisionPos=%v stepPos=%v]", movement.Client().Pos(), collisionPos, stepPos)
 			}
-
-			dbg.Notify(player.DebugModeMovementSim, true, "step successful: %v", collisionVel)
+		} else {
+			dbg.Notify(player.DebugModeMovementSim, true, "step failed")
 		}
 	}
 
@@ -416,9 +453,9 @@ func tryCollisions(movement player.MovementComponent, tx *world.Tx, dbg *player.
 	// it is accurate to vanilla's logic. Furthermore, it is useful such as in cases where the slide offset is being used
 	// by older versions to calculate collisions.
 	endPos := mgl32.Vec3{
-		(collisionBB.Min().X() + collisionBB.Max().X()) / 2,
+		(collisionBB.Min().X() + collisionBB.Max().X()) * 0.5,
 		collisionBB.Min().Y(),
-		(collisionBB.Min().Z() + collisionBB.Max().Z()) / 2,
+		(collisionBB.Min().Z() + collisionBB.Max().Z()) * 0.5,
 	}
 
 	// useSlideOffset is true for any version that is below 1.20.70. For some reason, it seems that for versions above 1.20.60, the
@@ -448,15 +485,15 @@ func tryCollisions(movement player.MovementComponent, tx *world.Tx, dbg *player.
 	movement.SetOnGround((yCollision && currVel.Y() < 0) || (movement.OnGround() && !yCollision && math32.Abs(currVel.Y()) <= 1e-5))
 	movement.SetVel(collisionVel)
 
-	dbg.Notify(player.DebugModeMovementSim, true, "finalVel=%v finalPos=%v", collisionVel, movement.Pos())
 	dbg.Notify(player.DebugModeMovementSim, true, "clientVel=%v clientPos=%v", movement.Client().Mov(), movement.Client().Pos())
+	dbg.Notify(player.DebugModeMovementSim, true, "finalVel=%v finalPos=%v", collisionVel, movement.Pos())
 
 	dbg.Notify(player.DebugModeMovementSim, true, "(client) hzCollision=%v yCollision=%v", movement.Client().HorizontalCollision(), movement.Client().VerticalCollision())
 	dbg.Notify(player.DebugModeMovementSim, true, "(server) xCollision=%v yCollision=%v zCollision=%v", movement.XCollision(), movement.YCollision(), movement.ZCollision())
 }
 
 // avoidEdge is the function that helps the movement component remain at the edge of a block when sneaking.
-func avoidEdge(movement player.MovementComponent, tx *world.Tx, dbg *player.Debugger) {
+func avoidEdge(movement player.MovementComponent, src world.BlockSource, dbg *player.Debugger) {
 	if !movement.Sneaking() || !movement.OnGround() || movement.Vel().Y() > 0 {
 		dbg.Notify(
 			player.DebugModeMovementSim,
@@ -480,7 +517,7 @@ func avoidEdge(movement player.MovementComponent, tx *world.Tx, dbg *player.Debu
 	bb := movement.BoundingBox().GrowVec3(mgl32.Vec3{-edgeBoundry, 0, -edgeBoundry})
 	xMov, zMov := newVel.X(), newVel.Z()
 
-	for xMov != 0.0 && len(utils.GetNearbyBBoxes(bb.Translate(mgl32.Vec3{xMov, -game.StepHeight * 1.01, 0}), tx)) == 0 {
+	for xMov != 0.0 && len(utils.GetNearbyBBoxes(bb.Translate(mgl32.Vec3{xMov, -game.StepHeight * 1.01, 0}), src)) == 0 {
 		if xMov < offset && xMov >= -offset {
 			xMov = 0
 		} else if xMov > 0 {
@@ -490,7 +527,7 @@ func avoidEdge(movement player.MovementComponent, tx *world.Tx, dbg *player.Debu
 		}
 	}
 
-	for zMov != 0.0 && len(utils.GetNearbyBBoxes(bb.Translate(mgl32.Vec3{0, -game.StepHeight * 1.01, zMov}), tx)) == 0 {
+	for zMov != 0.0 && len(utils.GetNearbyBBoxes(bb.Translate(mgl32.Vec3{0, -game.StepHeight * 1.01, zMov}), src)) == 0 {
 		if zMov < offset && zMov >= -offset {
 			zMov = 0
 		} else if zMov > 0 {
@@ -500,7 +537,7 @@ func avoidEdge(movement player.MovementComponent, tx *world.Tx, dbg *player.Debu
 		}
 	}
 
-	for xMov != 0.0 && zMov != 0.0 && len(utils.GetNearbyBBoxes(bb.Translate(mgl32.Vec3{xMov, -game.StepHeight * 1.01, zMov}), tx)) == 0 {
+	for xMov != 0.0 && zMov != 0.0 && len(utils.GetNearbyBBoxes(bb.Translate(mgl32.Vec3{xMov, -game.StepHeight * 1.01, zMov}), src)) == 0 {
 		if xMov < offset && xMov >= -offset {
 			xMov = 0
 		} else if xMov > 0 {
@@ -526,14 +563,14 @@ func avoidEdge(movement player.MovementComponent, tx *world.Tx, dbg *player.Debu
 	dbg.Notify(player.DebugModeMovementSim, true, "(avoidEdge): oldVel=%v newVel=%v", oldVel, newVel)
 }
 
-func blocksInside(movement player.MovementComponent, tx *world.Tx) ([]world.Block, bool) {
+func blocksInside(movement player.MovementComponent, src world.BlockSource) ([]world.Block, bool) {
 	bb := movement.BoundingBox()
 	var blocks []world.Block
 
-	for _, result := range utils.GetNearbyBlocks(bb.Grow(1), false, true, tx) {
+	for _, result := range utils.GetNearbyBlocks(bb.Grow(1), false, true, src) {
 		pos := result.Position
 		block := result.Block
-		boxes := utils.BlockBoxes(block, pos, tx)
+		boxes := utils.BlockBoxes(block, pos, src)
 
 		for _, box := range boxes {
 			if bb.IntersectsWith(box.Translate(pos.Vec3())) {
