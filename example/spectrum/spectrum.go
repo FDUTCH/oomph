@@ -32,6 +32,7 @@ import (
 	v766 "github.com/oomph-ac/multiversion/multiversion/protocols/1_21/v766"
 	v776 "github.com/oomph-ac/multiversion/multiversion/protocols/1_21/v776"
 	v786 "github.com/oomph-ac/multiversion/multiversion/protocols/1_21/v786"
+	v800 "github.com/oomph-ac/multiversion/multiversion/protocols/1_21/v800"
 	"github.com/oomph-ac/oconfig"
 	"github.com/oomph-ac/oomph"
 	"github.com/oomph-ac/oomph/player"
@@ -83,16 +84,17 @@ func main() {
 
 	oconfig.Cfg = oconfig.DefaultConfig
 	oconfig.Cfg.Network.Transport = oconfig.NetworkTransportTCP
+	oconfig.Cfg.UseDebugCommands = true
 
 	oconfig.Cfg.Movement.AcceptClientPosition = false
-	oconfig.Cfg.Movement.PositionAcceptanceThreshold = 0.005
+	oconfig.Cfg.Movement.PositionAcceptanceThreshold = 0.003
 
 	oconfig.Cfg.Movement.AcceptClientVelocity = false
-	oconfig.Cfg.Movement.PersuasionThreshold = 0.001
-	oconfig.Cfg.Movement.CorrectionThreshold = 0.001
+	oconfig.Cfg.Movement.PersuasionThreshold = 0.003
+	oconfig.Cfg.Movement.CorrectionThreshold = 0.03
 
 	oconfig.Cfg.Combat.FullAuthoritative = true
-	oconfig.Cfg.Combat.MaxRewind = 4
+	oconfig.Cfg.Combat.MaxRewind = 6
 
 	packs, err := utils.ResourcePacks("/home/ethaniccc/temp/proxy-packs", "content_keys.json")
 	if err != nil {
@@ -120,6 +122,7 @@ func main() {
 		StatusProvider: statusProvider,
 		FlushRate:      -1, // FlushRate is set to -1 to allow Oomph to manually flush the connection.
 		AcceptedProtocols: []minecraft.Protocol{
+			v800.Protocol(),
 			v786.Protocol(),
 			v776.Protocol(),
 			v766.Protocol(),
@@ -138,7 +141,7 @@ func main() {
 			v589.Protocol(),
 		},
 		ResourcePacks:        packs,
-		TexturePacksRequired: true,
+		TexturePacksRequired: false,
 
 		AllowInvalidPackets: true,
 		AllowUnknownPackets: true,
