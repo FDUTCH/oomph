@@ -5,14 +5,14 @@ go 1.24.1
 require (
 	github.com/chewxy/math32 v1.11.1
 	github.com/cooldogedev/spectrum v0.0.40-0.20250527034552-55ddfe1bba67
-	github.com/df-mc/dragonfly v0.10.3
+	github.com/df-mc/dragonfly v0.10.5-0.20250624082330-b74df0c75956
 	github.com/elliotchance/orderedmap/v2 v2.7.0
 	github.com/ethaniccc/float32-cube v0.0.0-20250511224129-7af1f8c4ee12
 	github.com/getsentry/sentry-go v0.33.0
 	github.com/go-gl/mathgl v1.2.0
 	github.com/oomph-ac/oconfig v0.0.0-20250524170353-5d5d36507fab
 	github.com/sandertv/go-raknet v1.14.3-0.20250305181847-6af3e95113d6
-	github.com/sandertv/gophertunnel v1.46.0
+	github.com/sandertv/gophertunnel v1.47.6
 	github.com/sasha-s/go-deadlock v0.3.5
 	github.com/sirupsen/logrus v1.9.3
 )

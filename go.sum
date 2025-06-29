@@ -32,6 +32,7 @@ github.com/df-mc/atomic v1.10.0 h1:0ZuxBKwR/hxcFGorKiHIp+hY7hgY+XBTzhCYD2NqSEg=
 github.com/df-mc/atomic v1.10.0/go.mod h1:Gw9rf+rPIbydMjA329Jn4yjd/O2c/qusw3iNp4tFGSc=
 github.com/df-mc/dragonfly v0.10.3 h1:t0mxRvjjgG8uBevqqzejJVL2M6obi6RYePMTPDlXo74=
 github.com/df-mc/dragonfly v0.10.3/go.mod h1:pO7nuyRKV50ZVZzB7AhTMU/0p4cvk1/yCu43vFqAzcI=
+github.com/df-mc/dragonfly v0.10.5-0.20250624082330-b74df0c75956/go.mod h1:mnjZgW3Ej5zwPgDy2MEH0w8UkpbMxN7TAib6l5GGmHQ=
 github.com/df-mc/goleveldb v1.1.9 h1:ihdosZyy5jkQKrxucTQmN90jq/2lUwQnJZjIYIC/9YU=
 github.com/df-mc/goleveldb v1.1.9/go.mod h1:+NHCup03Sci5q84APIA21z3iPZCuk6m6ABtg4nANCSk=
 github.com/df-mc/worldupgrader v1.0.19 h1:BnwRe/lVv9IhwRWZK5olvTYNTKWh7rhFdqNPDMnoKFM=
