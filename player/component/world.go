@@ -50,6 +50,7 @@ func (c *WorldUpdaterComponent) HandleLevelChunk(pk *packet.LevelChunk) {
 
 	// Check if this LevelChunk packet is compatiable with oomph's handling.
 	if pk.SubChunkCount == protocol.SubChunkRequestModeLimited || pk.SubChunkCount == protocol.SubChunkRequestModeLimitless {
+		//c.mPlayer.Log().Debug("cannot debug chunk due to subchunk request mode unsupported", "subChunkCount", pk.SubChunkCount)
 		return
 	}
 	acknowledgement.NewChunkUpdateACK(c.mPlayer, pk).Run()
@@ -60,8 +61,13 @@ func (c *WorldUpdaterComponent) HandleUpdateBlock(pk *packet.UpdateBlock) {
 	pos := df_cube.Pos{int(pk.Position.X()), int(pk.Position.Y()), int(pk.Position.Z())}
 	b, ok := df_world.BlockByRuntimeID(pk.NewBlockRuntimeID)
 	if !ok {
-		c.mPlayer.Log().Errorf("unable to find block with runtime ID %v", pk.NewBlockRuntimeID)
+		c.mPlayer.Log().Warn("unable to find block with runtime ID", "blockRuntimeID", pk.NewBlockRuntimeID)
 		b = block.Air{}
+	}
+
+	if pk.Layer != 0 {
+		c.mPlayer.Log().Debug("unsupported layer update block", "layer", pk.Layer, "block", utils.BlockName(b), "pos", pos)
+		return
 	}
 
 	// TODO: Add a block policy to allow servers to determine whether block updates should be lag-compensated or if movement should
@@ -69,9 +75,9 @@ func (c *WorldUpdaterComponent) HandleUpdateBlock(pk *packet.UpdateBlock) {
 	c.mPlayer.ACKs().Add(acknowledgement.NewUpdateBlockACK(c.mPlayer, pos, b))
 }
 
-// AttemptBlockPlacement attempts a block placement request from the client. It returns false if the simulation is unable
+// AttemptItemInteractionWithBlock attempts a block placement request from the client. It returns false if the simulation is unable
 // to place a block at the given position.
-func (c *WorldUpdaterComponent) AttemptBlockPlacement(pk *packet.InventoryTransaction) bool {
+func (c *WorldUpdaterComponent) AttemptItemInteractionWithBlock(pk *packet.InventoryTransaction) bool {
 	dat, ok := pk.TransactionData.(*protocol.UseItemTransactionData)
 	if !ok {
 		return true
@@ -89,6 +95,7 @@ func (c *WorldUpdaterComponent) AttemptBlockPlacement(pk *packet.InventoryTransa
 		return false
 	}
 
+	holding := c.mPlayer.Inventory().Holding()
 	replacePos := utils.BlockToCubePos(dat.BlockPosition)
 	dfReplacePos := df_cube.Pos(replacePos)
 	replacingBlock := c.mPlayer.World().Block(dfReplacePos)
@@ -96,13 +103,13 @@ func (c *WorldUpdaterComponent) AttemptBlockPlacement(pk *packet.InventoryTransa
 	// Ignore the potential block placement if the player clicked air.
 	if _, isAir := replacingBlock.(block.Air); isAir {
 		return true
-	} else if _, ok := replacingBlock.(block.Activatable); ok && !c.mPlayer.Movement().PressingSneak() {
+	} else if act, ok := replacingBlock.(block.Activatable); ok && (!c.mPlayer.Movement().PressingSneak() || holding.Empty()) {
+		utils.ActivateBlock(c.mPlayer, act, df_cube.Face(dat.BlockFace), df_cube.Pos(replacePos), game.Vec32To64(dat.ClickedPosition), c.mPlayer.World())
 		return true
 	}
 
-	heldItem := c.mPlayer.Inventory().Holding().Item()
+	heldItem := holding.Item()
 	c.mPlayer.Dbg.Notify(player.DebugModeBlockPlacement, true, "item in hand: %T", heldItem)
-
 	switch heldItem := heldItem.(type) {
 	case *block.Air:
 		// This only happens when Dragonfly is unsure of what the item is (unregistered), so we use the client-authoritative block in hand.
@@ -203,7 +210,7 @@ func (c *WorldUpdaterComponent) ValidateInteraction(pk *packet.InventoryTransact
 	for intersectingBlockPos := range game.BlocksBetween(eyePos, interactPos) {
 		iterCount++
 		if iterCount > 49 {
-			c.mPlayer.Log().Debugf("too many iterations for interaction validation (eyePos=%v interactPos=%v uniqueBlocks=%d)", eyePos, interactPos, len(checkedPositions))
+			c.mPlayer.Log().Debug("too many iterations for interaction validation", "eyePos", eyePos, "interactPos", interactPos, "checkedPositions", len(checkedPositions))
 			break
 		}
 

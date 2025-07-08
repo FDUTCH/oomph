@@ -3,9 +3,8 @@ package player
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"log/slog"
 	"net"
-	"runtime"
 	"sync"
 	"time"
 
@@ -23,8 +22,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/text"
-	"github.com/sasha-s/go-deadlock"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -98,6 +95,8 @@ type Player struct {
 	// LastEquipmentData stores the last MobEquipment packet sent by the client to properly
 	// make an attack packet when Oomph's full authoritative combat detects a misprediction.
 	LastEquipmentData *packet.MobEquipment
+	// LastActorMetadata is the last actor metadata packet sent by the client
+	LastSetActorData *packet.SetActorData
 
 	// blockBreakProgress (usually between 0 and 1) is how far along the player is from breaking a targeted block.
 	blockBreakProgress float32
@@ -125,7 +124,7 @@ type Player struct {
 	// prevent race conditions, and to maintain accuracy with anti-cheat.
 	// e.g - making sure all acknowledgements are sent in the same batch as the packets they are
 	// being associated with.
-	procMu deadlock.Mutex
+	procMu sync.Mutex
 
 	// Dbg is the debugger of the player. It is used to log debug messages to the player.
 	Dbg *Debugger
@@ -162,9 +161,10 @@ type Player struct {
 	detections []Detection
 
 	// log is the logger of the player.
-	log *logrus.Logger
+	log *slog.Logger
 
 	recoverFunc func(p *Player, err any)
+	closer      func()
 
 	pkCtx *context.HandlePacketContext
 
@@ -175,7 +175,7 @@ type Player struct {
 }
 
 // New creates and returns a new Player instance.
-func New(log *logrus.Logger, mState MonitoringState, listener *minecraft.Listener) *Player {
+func New(log *slog.Logger, mState MonitoringState, listener *minecraft.Listener) *Player {
 	p := &Player{
 		MState: mState,
 
@@ -210,7 +210,7 @@ func New(log *logrus.Logger, mState MonitoringState, listener *minecraft.Listene
 		p.LastServerTick = mState.CurrentTime
 	}
 
-	p.world = world.New()
+	p.world = world.New(&p.log)
 	p.Dbg = NewDebugger(p)
 	return p
 }
@@ -358,12 +358,12 @@ func (p *Player) Popup(msg string, args ...interface{}) {
 }
 
 // Log returns the player's logger.
-func (p *Player) Log() *logrus.Logger {
+func (p *Player) Log() *slog.Logger {
 	return p.log
 }
 
 // SetLog sets the player's logger.
-func (p *Player) SetLog(log *logrus.Logger) {
+func (p *Player) SetLog(log *slog.Logger) {
 	p.log = log
 }
 
@@ -375,10 +375,7 @@ func (p *Player) Disconnect(reason string) {
 	p.SendPacketToClient(&packet.Disconnect{
 		Message: reason,
 	})
-	p.conn.Close()
-	if p.serverConn != nil {
-		p.serverConn.Close()
-	}
+	p.Close()
 }
 
 func (p *Player) BlockAddress(duration time.Duration) {
@@ -393,6 +390,14 @@ func (p *Player) IsVersion(ver int32) bool {
 
 func (p *Player) VersionInRange(oldest, latest int32) bool {
 	return p.Version >= oldest && p.Version <= latest
+}
+
+func (p *Player) SetCloser(closer func()) {
+	// If the player is already closed, we should not set the closer.
+	if p.Closed {
+		return
+	}
+	p.closer = closer
 }
 
 // Close closes the player.
@@ -412,16 +417,22 @@ func (p *Player) Close() error {
 			}
 		}
 
-		if log := p.log; log != nil {
-			if f, ok := log.Out.(io.WriteCloser); ok {
-				f.Close()
-			}
+		p.log = nil
+		if conn := p.conn; conn != nil {
+			p.conn.Close()
+			p.conn = nil
+		}
+		if serverConn := p.serverConn; serverConn != nil {
+			serverConn.Close()
+			p.serverConn = nil
 		}
 		p.Dbg.target = nil
 		p.world.PurgeChunks()
 		close(p.CloseChan)
 
-		go runtime.GC()
+		if closer := p.closer; closer != nil {
+			closer()
+		}
 	})
 
 	return nil

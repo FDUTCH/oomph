@@ -24,9 +24,9 @@ type WorldUpdaterComponent interface {
 	HandleSubChunk(pk *packet.SubChunk)
 	// HandleUpdateBlock allows the world updater component to handle an UpdateBlock packet sent by the server.
 	HandleUpdateBlock(pk *packet.UpdateBlock)
-	// AttemptBlockPlacement attempts a block placement request from the client. It returns false if the simulation is unable
+	// AttemptItemInteractionWithBlock attempts an item interaction with a block request from the client. It returns false if the simulation is unable
 	// to place a block at the given position.
-	AttemptBlockPlacement(pk *packet.InventoryTransaction) bool
+	AttemptItemInteractionWithBlock(pk *packet.InventoryTransaction) bool
 	// ValidateInteraction validates if a player is allowed to perform an action on an interactable block.
 	ValidateInteraction(pk *packet.InventoryTransaction) bool
 
@@ -163,7 +163,7 @@ func (p *Player) handleBlockActions(pk *packet.PlayerAuthInput) {
 					p.SendBlockUpdates([]protocol.BlockPos{*p.worldUpdater.BlockBreakPos()})
 					pk.InputData.Unset(packet.InputFlagPerformItemInteraction)
 					p.Popup("<red>Broke block too early!</red>")
-					p.Log().Debugf("broke block too early (progress=%.4f item=%v)", p.blockBreakProgress, p.Inventory().Holding())
+					p.Log().Debug("broke block too early", "progress", p.blockBreakProgress, "heldItem", p.Inventory().Holding())
 					continue
 				}
 
@@ -199,6 +199,11 @@ func (p *Player) handleBlockActions(pk *packet.PlayerAuthInput) {
 				p.blockBreakProgress += 1.0 / math32.Max(p.getExpectedBlockBreakTime(action.BlockPos), 0.001)
 				p.worldUpdater.SetBlockBreakPos(&action.BlockPos)
 				p.blockBreakInProgress = true
+
+				// We assume a potential mispredction here because the client while clicking, think it may need to break
+				// a block, but the server may instead think an entity is in the way of that block, constituting
+				// a misprediction.
+				p.combat.Attack(nil)
 			case protocol.PlayerActionAbortBreak:
 				//p.Message("abort break")
 				p.blockBreakProgress = 0.0
@@ -215,7 +220,7 @@ func (p *Player) handleBlockActions(pk *packet.PlayerAuthInput) {
 					p.SendBlockUpdates([]protocol.BlockPos{*p.worldUpdater.BlockBreakPos()})
 					pk.InputData.Unset(packet.InputFlagPerformItemInteraction)
 					p.Popup("<red>Broke block too early!</red>")
-					p.Log().Debugf("broke block too early (progress=%.4f item=%v)", p.blockBreakProgress, p.Inventory().Holding())
+					p.Log().Debug("broke block too early", "progress", p.blockBreakProgress, "heldItem", p.Inventory().Holding())
 					continue
 				}
 

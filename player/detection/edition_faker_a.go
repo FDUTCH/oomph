@@ -98,12 +98,14 @@ func (d *EditionFakerA) Detect(pk packet.Packet) {
 
 	// 1904044383 is the title ID of the preview client in MC:BE. According to @GameParrot, the preview client
 	// can be found on Windows, iOS, and Xbox.
-	if titleID == "1904044383" && !slices.Contains(previewEditionClients, deviceOS) {
-		data := orderedmap.NewOrderedMap[string, any]()
-		data.Set("titleID", titleID)
-		data.Set("givenOS", utils.Device(deviceOS))
-		data.Set("expectedOS", "Windows/iOS/Xbox")
-		d.mPlayer.FailDetection(d, data)
+	if titleID == "1904044383" {
+		if !slices.Contains(previewEditionClients, deviceOS) {
+			data := orderedmap.NewOrderedMap[string, any]()
+			data.Set("titleID", titleID)
+			data.Set("givenOS", utils.Device(deviceOS))
+			data.Set("expectedOS", "Windows/iOS/Xbox")
+			d.mPlayer.FailDetection(d, data)
+		}
 		return
 	}
 
@@ -129,11 +131,11 @@ func (d *EditionFakerA) Detect(pk packet.Packet) {
 		case "":
 			if d.mPlayer.Version != player.GameVersion1_21_80 {
 				d.mPlayer.Disconnect("TitleID not present")
-				d.mPlayer.Log().Warnf("no titleID present in identity data (version=%d)", d.mPlayer.Version)
+				d.mPlayer.Log().Warn("no titleID present in identity data", "version", d.mPlayer.Version)
 			}
 		default:
 			d.mPlayer.Disconnect(fmt.Sprintf("report to admin: unknown title ID %s with OS %v", titleID, deviceOS))
-			d.mPlayer.Log().Warnf("unknown title ID %s with OS %v", titleID, deviceOS)
+			d.mPlayer.Log().Warn("unknown title ID for given OS", "titleID", titleID, "deviceOS", deviceOS)
 		}
 	}
 }
