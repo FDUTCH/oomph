@@ -732,63 +732,6 @@ func (mc *AuthoritativeMovementComponent) Update(pk *packet.PlayerAuthInput) {
 		mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, !mc.serverSprintApplied, "server sprint not applied on current frame")
 		mc.serverSprintApplied = true
 
-	if needsSpeedAdjusted {
-		mc.serverUpdatedSpeed = false
-		mc.movementSpeed = mc.defaultMovementSpeed
-		if mc.sprinting {
-			mc.movementSpeed *= 1.3
-		}
-	}
-
-	if pk.InputData.Load(packet.InputFlagStartSneaking) {
-		mc.sneaking = true
-	} else if pk.InputData.Load(packet.InputFlagStopSneaking) {
-		mc.sneaking = false
-	} else {
-		mc.sneaking = pk.InputData.Load(packet.InputFlagSneakDown)
-	}
-
-	mc.jumping = pk.InputData.Load(packet.InputFlagStartJumping)
-	mc.pressingJump = pk.InputData.Load(packet.InputFlagJumping)
-	mc.jumpHeight = game.DefaultJumpHeight
-	if jumpBoost, ok := mc.mPlayer.Effects().Get(packet.EffectJumpBoost); ok {
-		mc.jumpHeight += float32(jumpBoost.Amplifier) * 0.1
-	}
-
-	// Jump timer resets if the jump button is not held down.
-	if !mc.pressingJump {
-		mc.jumpDelay = 0
-	}
-	mc.gravity = game.NormalGravity
-
-	// The stop flag should be checked first, as this would indicate to us that the player is no longer gliding.
-	// In the case where both flags are sent in the same tick, the gliding status will be set to false.
-	if pk.InputData.Load(packet.InputFlagStopGliding) {
-		mc.gliding = false
-		mc.glideBoostTicks = 0
-	} else if pk.InputData.Load(packet.InputFlagStartGliding) {
-		mc.gliding = true
-	}
-
-	simulation.SimulatePlayerMovement(mc.mPlayer, mc)
-
-	// On older versions, there seems to be a delay before the sprinting status is actually applied.
-	if !isNewVersionPlayer {
-		needsSpeedAdjusted = false
-		if startFlag && stopFlag /*&& hasForwardKeyPressed*/ {
-			mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "1.20.80- has start/stop sprint race condition")
-			mc.sprinting = false
-			needsSpeedAdjusted = true
-		} else if startFlag /*&& !mc.sprinting && hasForwardKeyPressed*/ {
-			mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "1.20.80- starts sprint")
-			mc.sprinting = true
-			needsSpeedAdjusted = true
-		} else if stopFlag /*&& mc.sprinting && !hasForwardKeyPressed*/ {
-			mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "1.20.80- stops sprint")
-			mc.sprinting = false
-			needsSpeedAdjusted = !mc.serverUpdatedSpeed
-		}
-		// Adjust the movement speed of the movement component if their sprint state changes.
 		if needsSpeedAdjusted {
 			mc.serverUpdatedSpeed = false
 			mc.movementSpeed = mc.defaultMovementSpeed
@@ -796,24 +739,82 @@ func (mc *AuthoritativeMovementComponent) Update(pk *packet.PlayerAuthInput) {
 				mc.movementSpeed *= 1.3
 			}
 		}
-	}
 
-	// Notify any detections that need to handle knockback.
-	if mc.HasKnockback() {
-		for _, d := range mc.mPlayer.Detections() {
-			if d, ok := d.(interface{ HandleKnockback() }); ok {
-				d.HandleKnockback()
+		if pk.InputData.Load(packet.InputFlagStartSneaking) {
+			mc.sneaking = true
+		} else if pk.InputData.Load(packet.InputFlagStopSneaking) {
+			mc.sneaking = false
+		} else {
+			mc.sneaking = pk.InputData.Load(packet.InputFlagSneakDown)
+		}
+
+		mc.jumping = pk.InputData.Load(packet.InputFlagStartJumping)
+		mc.pressingJump = pk.InputData.Load(packet.InputFlagJumping)
+		mc.jumpHeight = game.DefaultJumpHeight
+		if jumpBoost, ok := mc.mPlayer.Effects().Get(packet.EffectJumpBoost); ok {
+			mc.jumpHeight += float32(jumpBoost.Amplifier) * 0.1
+		}
+
+		// Jump timer resets if the jump button is not held down.
+		if !mc.pressingJump {
+			mc.jumpDelay = 0
+		}
+		mc.gravity = game.NormalGravity
+
+		// The stop flag should be checked first, as this would indicate to us that the player is no longer gliding.
+		// In the case where both flags are sent in the same tick, the gliding status will be set to false.
+		if pk.InputData.Load(packet.InputFlagStopGliding) {
+			mc.gliding = false
+			mc.glideBoostTicks = 0
+		} else if pk.InputData.Load(packet.InputFlagStartGliding) {
+			mc.gliding = true
+		}
+
+		simulation.SimulatePlayerMovement(mc.mPlayer, mc)
+
+		// On older versions, there seems to be a delay before the sprinting status is actually applied.
+		if !isNewVersionPlayer {
+			needsSpeedAdjusted = false
+			if startFlag && stopFlag /*&& hasForwardKeyPressed*/ {
+				mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "1.20.80- has start/stop sprint race condition")
+				mc.sprinting = false
+				needsSpeedAdjusted = true
+			} else if startFlag /*&& !mc.sprinting && hasForwardKeyPressed*/ {
+				mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "1.20.80- starts sprint")
+				mc.sprinting = true
+				needsSpeedAdjusted = true
+			} else if stopFlag /*&& mc.sprinting && !hasForwardKeyPressed*/ {
+				mc.mPlayer.Dbg.Notify(player.DebugModeMovementSim, true, "1.20.80- stops sprint")
+				mc.sprinting = false
+				needsSpeedAdjusted = !mc.serverUpdatedSpeed
+			}
+			// Adjust the movement speed of the movement component if their sprint state changes.
+			if needsSpeedAdjusted {
+				mc.serverUpdatedSpeed = false
+				mc.movementSpeed = mc.defaultMovementSpeed
+				if mc.sprinting {
+					mc.movementSpeed *= 1.3
+				}
 			}
 		}
-	}
 
-	mc.glideBoostTicks--
-	mc.ticksSinceKb++
-	mc.ticksSinceTeleport++
-	if mc.jumpDelay > 0 {
-		mc.jumpDelay--
-	}
+		// Notify any detections that need to handle knockback.
+		if mc.HasKnockback() {
+			for _, d := range mc.mPlayer.Detections() {
+				if d, ok := d.(interface{ HandleKnockback() }); ok {
+					d.HandleKnockback()
+				}
+			}
+		}
 
+		mc.glideBoostTicks--
+		mc.ticksSinceKb++
+		mc.ticksSinceTeleport++
+		if mc.jumpDelay > 0 {
+			mc.jumpDelay--
+		}
+
+	}
 }
 
 // ServerUpdate updates certain states of the movement component based on a packet sent by the remote server.
