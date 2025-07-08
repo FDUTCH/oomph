@@ -1,6 +1,7 @@
 package oomph
 
 import (
+	"log/slog"
 	"os"
 	"sync/atomic"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
-	"github.com/sirupsen/logrus"
 )
 
 var _ session.Processor = &Processor{}
@@ -32,7 +32,7 @@ func NewProcessor(
 	s *session.Session,
 	registry *session.Registry,
 	listener *minecraft.Listener,
-	log *logrus.Logger,
+	log *slog.Logger,
 ) *Processor {
 	pl := player.New(log, player.MonitoringState{
 		IsReplay:    false,
@@ -97,7 +97,7 @@ func (p *Processor) ProcessClient(ctx *session.Context, pk *packet.Packet) {
 	}
 }
 
-func (p *Processor) ProcessEndOfBatch() {
+func (p *Processor) ProcessFlush(ctx *session.Context) {
 	pl := p.pl.Load()
 	if pl == nil {
 		return
@@ -106,10 +106,14 @@ func (p *Processor) ProcessEndOfBatch() {
 	pl.PauseProcessing()
 	defer pl.ResumeProcessing()
 
+	// We want Oomph to flush the connection whilst processing is stopped to prevent it from handling other packets before the connection
+	// is actually flushed.
+	ctx.Cancel()
+
 	if acks := pl.ACKs(); acks != nil {
 		acks.Flush()
 		if err := pl.Conn().Flush(); err != nil {
-			pl.Log().Errorf("error flushing client connection: %v", err)
+			pl.Log().Error("error flushing client connection", "error", err)
 		}
 	}
 }

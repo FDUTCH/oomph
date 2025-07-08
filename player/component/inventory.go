@@ -35,7 +35,7 @@ type InventoryComponent struct {
 }
 
 func NewInventoryComponent(p *player.Player) *InventoryComponent {
-	return &InventoryComponent{
+	c := &InventoryComponent{
 		mPlayer: p,
 
 		pInventory:   player.NewInventory(inventorySizePlayer),
@@ -43,6 +43,9 @@ func NewInventoryComponent(p *player.Player) *InventoryComponent {
 		pOffhand:     player.NewInventory(inventorySizeOffhand),
 		pUiInventory: player.NewInventory(inventorySizeUI),
 	}
+	c.pOffhand.SetSpecialSlot(1, 0)
+
+	return c
 }
 
 func (c *InventoryComponent) Helmet() item.Stack {
@@ -154,12 +157,12 @@ func (c *InventoryComponent) Holding() item.Stack {
 func (c *InventoryComponent) HandleInventorySlot(pk *packet.InventorySlot) {
 	inv, found := c.WindowFromWindowID(int32(pk.WindowID))
 	if !found {
-		c.mPlayer.Log().Debugf("no inventory with window id %d found", pk.WindowID)
+		c.mPlayer.Log().Debug("no inventory with window id found", "windowID", pk.WindowID)
 		return
 	}
 
 	if pk.NewItem.Stack.NetworkID == 0 {
-		inv.SetSlot(int(pk.Slot), item.NewStack(block.Air{}, 0))
+		inv.SetSlot(int(pk.Slot), item.NewStack(&block.Air{}, 0))
 	} else {
 		iStack := utils.StackToItem(pk.NewItem.Stack)
 		inv.SetSlot(int(pk.Slot), utils.ReadItem(pk.NewItem.Stack.NBTData, &iStack))
@@ -169,7 +172,7 @@ func (c *InventoryComponent) HandleInventorySlot(pk *packet.InventorySlot) {
 func (c *InventoryComponent) HandleInventoryContent(pk *packet.InventoryContent) {
 	inv, found := c.WindowFromWindowID(int32(pk.WindowID))
 	if !found {
-		c.mPlayer.Log().Debugf("no inventory with id %d found", pk.WindowID)
+		c.mPlayer.Log().Debug("no inventory with id found", "windowID", pk.WindowID)
 		return
 	}
 
@@ -184,7 +187,7 @@ func (c *InventoryComponent) HandleInventoryContent(pk *packet.InventoryContent)
 }
 
 func (c *InventoryComponent) HandleSingleRequest(request protocol.ItemStackRequest) {
-	c.mPlayer.Log().Debugf("received item stack request %d", request.RequestID)
+	c.mPlayer.Log().Debug("received item stack request", "requestID", request.RequestID)
 	tx := newInvRequest(request.RequestID)
 	for _, action := range request.Actions {
 		switch action := action.(type) {
@@ -201,7 +204,7 @@ func (c *InventoryComponent) HandleSingleRequest(request protocol.ItemStackReque
 		case *protocol.MineBlockStackRequestAction:
 			tx.append(newUnknownAction(c.mPlayer, fmt.Sprintf("%T", action)))
 		default:
-			c.mPlayer.Log().Debugf("unhandled item stack request action %T", action)
+			c.mPlayer.Log().Debug("unhandled item stack request action", "actionType", fmt.Sprintf("%T", action))
 			tx.append(newUnknownAction(c.mPlayer, fmt.Sprintf("%T", action)))
 		}
 	}
@@ -229,21 +232,21 @@ func (c *InventoryComponent) HandleItemStackResponse(pk *packet.ItemStackRespons
 		// This should never happen, but it did :/
 		if c.firstRequest == nil {
 			// Here, we are going to make the server re-send what it thinks should be in the inventory to prevent any type of desync.
-			c.mPlayer.Log().Debugf("cannot process response (%d) when InventoryComponent.firstRequest is nil - force syncing inventory", response.RequestID)
+			c.mPlayer.Log().Debug("cannot process response when InventoryComponent.firstRequest is nil - force syncing inventory", "requestID", response.RequestID)
 			//c.ForceSync()
 			continue
 		}
 
 		if response.RequestID != c.firstRequest.id {
-			c.mPlayer.Log().Debugf("received response for unknown request id %d", response.RequestID)
+			c.mPlayer.Log().Debug("received response for unknown request id", "requestID", response.RequestID)
 			return
 		}
 
 		if response.Status == protocol.ItemStackResponseStatusOK {
-			c.mPlayer.Log().Debugf("request %d succeeded", response.RequestID)
+			c.mPlayer.Log().Debug("request succeeded", "requestID", response.RequestID)
 			c.firstRequest.accept()
 		} else {
-			c.mPlayer.Log().Debugf("request %d failed with status %d", response.RequestID, response.Status)
+			c.mPlayer.Log().Debug("request failed", "requestID", response.RequestID, "status", response.Status)
 			c.firstRequest.reject()
 		}
 
@@ -262,13 +265,13 @@ func (c *InventoryComponent) HandleItemStackResponse(pk *packet.ItemStackRespons
 func (c *InventoryComponent) handleTransferRequest(tx *invReq, src, dst protocol.StackRequestSlotInfo, count int) {
 	srcInv, ok := c.WindowFromContainerID(int32(src.Container.ContainerID))
 	if !ok {
-		c.mPlayer.Log().Debugf("no inventory with container id %d found", src.Container.ContainerID)
+		c.mPlayer.Log().Debug("no inventory with container id found", "containerID", src.Container.ContainerID)
 		return
 	}
 
 	dstInv, ok := c.WindowFromContainerID(int32(dst.Container.ContainerID))
 	if !ok {
-		c.mPlayer.Log().Debugf("no inventory with container id %d found", dst.Container.ContainerID)
+		c.mPlayer.Log().Debug("no inventory with container id found", "containerID", dst.Container.ContainerID)
 		return
 	}
 
@@ -287,13 +290,13 @@ func (c *InventoryComponent) handleTransferRequest(tx *invReq, src, dst protocol
 func (c *InventoryComponent) handleSwapRequest(tx *invReq, action *protocol.SwapStackRequestAction) {
 	srcInv, ok := c.WindowFromContainerID(int32(action.Source.Container.ContainerID))
 	if !ok {
-		c.mPlayer.Log().Debugf("no inventory with container id %d found", action.Source.Container.ContainerID)
+		c.mPlayer.Log().Debug("no inventory with container id found", "containerID", action.Source.Container.ContainerID)
 		return
 	}
 
 	dstInv, ok := c.WindowFromContainerID(int32(action.Destination.Container.ContainerID))
 	if !ok {
-		c.mPlayer.Log().Debugf("no inventory with container id %d found", action.Destination.Container.ContainerID)
+		c.mPlayer.Log().Debug("no inventory with container id found", "containerID", action.Destination.Container.ContainerID)
 		return
 	}
 
@@ -311,7 +314,7 @@ func (c *InventoryComponent) handleSwapRequest(tx *invReq, action *protocol.Swap
 func (c *InventoryComponent) handleDestroyRequest(tx *invReq, src protocol.StackRequestSlotInfo, count int, isDrop bool) {
 	inv, foundInv := c.WindowFromContainerID(int32(src.Container.ContainerID))
 	if !foundInv {
-		c.mPlayer.Log().Debugf("no inventory with container id %d found", src.Container.ContainerID)
+		c.mPlayer.Log().Debug("no inventory with container id found", "containerID", src.Container.ContainerID)
 		return
 	}
 	tx.append(newDestroyAction(

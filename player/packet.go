@@ -1,6 +1,7 @@
 package player
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/df-mc/dragonfly/server/item"
@@ -11,7 +12,6 @@ import (
 	"github.com/oomph-ac/oomph/utils"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
-	"github.com/sirupsen/logrus"
 )
 
 var ClientDecode = []uint32{
@@ -27,6 +27,27 @@ var ClientDecode = []uint32{
 	packet.IDItemStackRequest,
 	packet.IDLevelSoundEvent,
 	packet.IDClientMovementPredictionSync,
+}
+
+var ServerDecode = []uint32{
+	packet.IDAddActor,
+	packet.IDAddPlayer,
+	packet.IDChunkRadiusUpdated,
+	packet.IDInventorySlot,
+	packet.IDInventoryContent,
+	packet.IDItemStackResponse,
+	packet.IDLevelChunk,
+	packet.IDMobEffect,
+	packet.IDMoveActorAbsolute,
+	packet.IDMovePlayer,
+	packet.IDRemoveActor,
+	packet.IDSetActorData,
+	packet.IDSetActorMotion,
+	packet.IDSetPlayerGameType,
+	packet.IDSubChunk,
+	packet.IDUpdateAbilities,
+	packet.IDUpdateAttributes,
+	packet.IDUpdateBlock,
 }
 
 func (p *Player) HandleClientPacket(ctx *context.HandlePacketContext) {
@@ -61,12 +82,10 @@ func (p *Player) HandleClientPacket(ctx *context.HandlePacketContext) {
 			var mode int
 			switch args[1] {
 			case "type:log":
-				p.Log().SetLevel(logrus.DebugLevel)
 				p.Dbg.LoggingType = LoggingTypeLogFile
 				p.Message("Set debug logging type to <green>log file</green>.")
 				return
 			case "type:message":
-				p.Log().SetLevel(logrus.InfoLevel)
 				p.Dbg.LoggingType = LoggingTypeMessage
 				p.Message("Set debug logging type to <green>message</green>.")
 				return
@@ -197,7 +216,7 @@ func (p *Player) HandleClientPacket(ctx *context.HandlePacketContext) {
 			p.inventory.SetHeldSlot(int32(tr.HotBarSlot))
 		} else if _, ok := pk.TransactionData.(*protocol.NormalTransactionData); ok {
 			if len(pk.Actions) != 2 {
-				p.Log().Debugf("drop action should have exactly 2 actions, got %d", len(pk.Actions))
+				p.Log().Debug("drop action should have exactly 2 actions, got different amount", "actionCount", len(pk.Actions))
 				if len(pk.Actions) > 5 {
 					p.Disconnect("Error: Too many actions in NormalTransactionData")
 				}
@@ -220,14 +239,14 @@ func (p *Player) HandleClientPacket(ctx *context.HandlePacketContext) {
 			}
 
 			if !foundClientItemStack || sourceSlot == -1 || droppedCount == -1 {
-				p.Log().Debugf("missing information for drop action (foundItem=%v sourceSlot=%d droppedCount=%d)", foundClientItemStack, sourceSlot, droppedCount)
+				p.Log().Debug("missing information for drop action", "foundItem", foundClientItemStack, "srcSlot", sourceSlot, "dropCount", droppedCount)
 				return
 			}
 
 			inv, _ := p.inventory.WindowFromWindowID(protocol.WindowIDInventory)
 			sourceSlotItem := inv.Slot(sourceSlot)
 			if droppedCount > sourceSlotItem.Count() {
-				p.Log().Debugf("dropped count (%d) is greater than source slot count (%d)", droppedCount, sourceSlotItem.Count())
+				p.Log().Debug("dropped count is greater than source slot count", "droppedCount", droppedCount, "available", sourceSlotItem.Count())
 				return
 			}
 			inv.SetSlot(sourceSlot, sourceSlotItem.Grow(-droppedCount))
@@ -236,7 +255,7 @@ func (p *Player) HandleClientPacket(ctx *context.HandlePacketContext) {
 		/* if !p.worldUpdater.ValidateInteraction(pk) {
 			ctx.Cancel()
 		} */
-		if !p.worldUpdater.AttemptBlockPlacement(pk) {
+		if !p.worldUpdater.AttemptItemInteractionWithBlock(pk) {
 			ctx.Cancel()
 		}
 	case *packet.MobEquipment:
@@ -252,8 +271,12 @@ func (p *Player) HandleClientPacket(ctx *context.HandlePacketContext) {
 		}
 	case *packet.ItemStackRequest:
 		p.inventory.HandleItemStackRequest(pk)
+	case *packet.LevelSoundEvent:
+		if pk.SoundType == packet.SoundEventAttackNoDamage {
+			p.Combat().Attack(nil)
+		}
 	default:
-		p.log.Debugf("unhandled client packet: %T", pk)
+		p.log.Debug("unhandled client packet", "packetID", pk.ID())
 	}
 	p.RunDetections(pk)
 }
@@ -337,6 +360,8 @@ func (p *Player) HandleServerPacket(ctx *context.HandlePacketContext) {
 				e.Width, e.Height, e.Scale = calculateBBSize(pk.EntityMetadata, e.Width, e.Height, e.Scale)
 			}
 		} else {
+			copyPk := *pk
+			p.LastSetActorData = &copyPk
 			p.movement.ServerUpdate(pk)
 		}
 	case *packet.SetActorMotion:
@@ -363,5 +388,7 @@ func (p *Player) HandleServerPacket(ctx *context.HandlePacketContext) {
 		}
 	case *packet.UpdateBlock:
 		p.worldUpdater.HandleUpdateBlock(pk)
+	default:
+		p.log.Debug("unhandled server packet", "packetID", pk.ID(), "type", fmt.Sprintf("%T", pk))
 	}
 }
